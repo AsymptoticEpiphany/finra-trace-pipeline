@@ -83,7 +83,7 @@ The `fake_trace_generator.py` script simulates a FINRA TRACE-like bond market da
 - **Late-trade detection** where trades reported more than 15 minutes after execution are flagged with `modifier3: "Z"`, mirroring FINRA's actual reporting convention
 - **Configurable throughput** with adjustable message rate, rate jitter, and periodic burst modes for stress testing the pipeline under varying load profiles
 
-## Quick Start (Docker)
+## Quick Start (Docker — Everything Containerized)
 
 The fastest way to run the full pipeline — no PostgreSQL installation, no manual setup:
 
@@ -107,48 +107,73 @@ To stop everything:
 docker compose down
 ```
 
-## Building Locally
+## Building and Running Locally
 
 ### Prerequisites
 
 - C++17 compiler (GCC 7+ or Clang 5+)
 - CMake 3.14+
-- PostgreSQL with `libpq` development headers (`libpq-dev` on Ubuntu)
+- PostgreSQL `libpq` development headers (`sudo apt-get install libpq-dev`)
 - Python 3 (for the TRACE feed simulator)
+- Docker (for the database — no local PostgreSQL installation needed)
 
 ### Build
 
 ```bash
 make build             # Debug build with memory sanitizers (ASan/UBSan/LSan)
 make release           # Optimized production build
-make test              # Run all unit tests with sanitizer checks
+make test              # Run all unit tests (no database required)
 make clean             # Remove build artifacts
 ```
 
-### Database Setup (Local)
+### Database Setup
 
-When running locally (without Docker), you need a PostgreSQL database. The `db/init.sql` script creates the required tables and seeds sample issuer data:
+The easiest way to get a database running locally is to use the Docker PostgreSQL container — the schema and sample data are set up automatically:
 
 ```bash
-createdb finance
-psql -d finance -f db/init.sql
+# Start just the database container (runs on port 5433)
+docker compose up -d postgres
+
+# Verify it's running
+docker compose exec postgres psql -U postgres -d finance -c "SELECT COUNT(*) FROM issuer_info;"
+# Should show: 28
 ```
 
-Update the connection string in `main.cpp` or set the `PG_CONNINFO` environment variable:
+To inspect or query the database at any time:
 
 ```bash
-export PG_CONNINFO="dbname=finance user=your_username host=localhost"
+docker compose exec postgres psql -U postgres -d finance
 ```
 
-### Run the Pipeline (Local)
+To stop the database:
 
 ```bash
-# Terminal 1-3: Start TRACE feed simulators on separate ports
+docker compose down
+```
+
+If you prefer to use a locally installed PostgreSQL instead of Docker:
+
+```bash
+sudo systemctl start postgresql
+sudo -u postgres createdb finance
+sudo -u postgres createuser your_username
+sudo -u postgres psql -d finance -f db/init.sql
+export PG_CONNINFO="dbname=finance user=your_username host=/var/run/postgresql"
+```
+
+### Run the Pipeline
+
+```bash
+# Terminal 1: Start the database (if not already running)
+docker compose up -d postgres
+
+# Terminal 2-4: Start TRACE feed simulators on separate ports
 python3 fake_trace_generator.py --tcp --port 5555
 python3 fake_trace_generator.py --tcp --port 5556
 python3 fake_trace_generator.py --tcp --port 5557
 
-# Terminal 4: Run the pipeline
+# Terminal 5: Run the pipeline (connects to Docker postgres on port 5433)
+export PG_CONNINFO="dbname=finance user=postgres password=postgres host=localhost port=5433"
 make run
 ```
 
@@ -166,10 +191,8 @@ Unit tests use GoogleTest and cover the MPMC queue across several dimensions:
 All tests run under AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer in CI. The stress test is specifically designed to surface race conditions, ABA problems, and memory ordering bugs under high contention.
 
 ```bash
-make test    # Run tests locally with sanitizers
+make test    # No database required — tests the MPMC queue in isolation
 ```
-
-Note: unit tests do NOT require PostgreSQL — they test the MPMC queue in isolation.
 
 ## CI/CD
 
