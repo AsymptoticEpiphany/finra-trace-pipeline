@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <cstdlib>
 #include <libpq-fe.h>
+#include <netdb.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -111,38 +112,43 @@ bool insertTrade(PGconn* conn, const json& msg) {
 // TCP Reader Thread (Producer)
 // ----------------------------
 void tcpReader(const std::string& host, int port, int producerId) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        perror("Socket creation failed");
-        return;
-    }
-
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
-    inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
 
-    if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        // Retry with backoff — the feed generator may not be listening yet
-        close(sock);
-        for (int attempt = 1; attempt <= 10; ++attempt) {
-            std::cerr << "[Producer " << producerId << "] Connect to port " << port
+    // Resolve hostname (supports both "127.0.0.1" and "generators")
+    struct addrinfo hints{}, *result = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host.c_str(), nullptr, &hints, &result) != 0 || !result) {
+        std::cerr << "[Producer " << producerId << "] Failed to resolve host: " << host << "\n";
+        return;
+    }
+    server_addr.sin_addr = reinterpret_cast<sockaddr_in*>(result->ai_addr)->sin_addr;
+    freeaddrinfo(result);
+
+    // Connect with retry
+    int sock = -1;
+    for (int attempt = 0; attempt <= 10; ++attempt) {
+        if (attempt > 0) {
+            std::cerr << "[Producer " << producerId << "] Connect to " << host << ":" << port
                       << " failed, retry " << attempt << "/10...\n";
             std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
 
-            sock = socket(AF_INET, SOCK_STREAM, 0);
-            if (sock < 0) {
-                perror("Socket creation failed");
-                return;
-            }
-            if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) == 0) {
-                break;  // connected
-            }
-            close(sock);
-            if (attempt == 10) {
-                std::cerr << "[Producer " << producerId << "] Failed to connect after 10 attempts\n";
-                return;
-            }
+        sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) {
+            perror("Socket creation failed");
+            return;
+        }
+        if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) == 0) {
+            break;  // connected
+        }
+        close(sock);
+        sock = -1;
+        if (attempt == 10) {
+            std::cerr << "[Producer " << producerId << "] Failed to connect after 10 attempts\n";
+            return;
         }
     }
 
