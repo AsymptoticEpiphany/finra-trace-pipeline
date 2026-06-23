@@ -83,13 +83,37 @@ The `fake_trace_generator.py` script simulates a FINRA TRACE-like bond market da
 - **Late-trade detection** where trades reported more than 15 minutes after execution are flagged with `modifier3: "Z"`, mirroring FINRA's actual reporting convention
 - **Configurable throughput** with adjustable message rate, rate jitter, and periodic burst modes for stress testing the pipeline under varying load profiles
 
-## Building and Running
+## Quick Start (Docker)
+
+The fastest way to run the full pipeline — no PostgreSQL installation, no manual setup:
+
+```bash
+git clone https://github.com/AsymptoticEpiphany/finra-trace-pipeline.git
+cd finra-trace-pipeline
+docker compose up
+```
+
+This starts PostgreSQL (with schema and sample issuer data), three TRACE feed simulators, and the C++ pipeline application. Trade data will begin flowing through the MPMC queue into the database within seconds.
+
+To inspect the ingested data:
+
+```bash
+docker compose exec postgres psql -U postgres -d finance -c "SELECT cusip, issuer, price, side, volume FROM trades ORDER BY ingested_at DESC LIMIT 10;"
+```
+
+To stop everything:
+
+```bash
+docker compose down
+```
+
+## Building Locally
 
 ### Prerequisites
 
 - C++17 compiler (GCC 7+ or Clang 5+)
 - CMake 3.14+
-- PostgreSQL with `libpq` development headers
+- PostgreSQL with `libpq` development headers (`libpq-dev` on Ubuntu)
 - Python 3 (for the TRACE feed simulator)
 
 ### Build
@@ -101,7 +125,22 @@ make test              # Run all unit tests with sanitizer checks
 make clean             # Remove build artifacts
 ```
 
-### Run the Pipeline
+### Database Setup (Local)
+
+When running locally (without Docker), you need a PostgreSQL database. The `db/init.sql` script creates the required tables and seeds sample issuer data:
+
+```bash
+createdb finance
+psql -d finance -f db/init.sql
+```
+
+Update the connection string in `main.cpp` or set the `PG_CONNINFO` environment variable:
+
+```bash
+export PG_CONNINFO="dbname=finance user=your_username host=localhost"
+```
+
+### Run the Pipeline (Local)
 
 ```bash
 # Terminal 1-3: Start TRACE feed simulators on separate ports
@@ -109,15 +148,11 @@ python3 fake_trace_generator.py --tcp --port 5555
 python3 fake_trace_generator.py --tcp --port 5556
 python3 fake_trace_generator.py --tcp --port 5557
 
-# Terminal 4: Run the pipeline (requires PostgreSQL discussed below)
+# Terminal 4: Run the pipeline
 make run
 ```
 
-The pipeline connects to each TCP feed, parses incoming JSON trade messages, enriches them with issuer metadata from a PostgreSQL lookup table, pushes them through the MPMC queue, and persists them to a `trades` hypertable via consumer threads.
-
-### Database Setup
-
-The system expects a PostgreSQL database named `finance` with an `issuer_info` table (issuer, rating, industry) and a `trades` table. Connection parameters are currently in `main.cpp` with command-line configuration on the roadmap.
+The pipeline connects to each TCP feed, parses incoming JSON trade messages, enriches them with issuer metadata from the PostgreSQL lookup table, pushes them through the MPMC queue, and persists them to the `trades` table via consumer threads.
 
 ## Tests
 
@@ -134,6 +169,8 @@ All tests run under AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSaniti
 make test    # Run tests locally with sanitizers
 ```
 
+Note: unit tests do NOT require PostgreSQL — they test the MPMC queue in isolation.
+
 ## CI/CD
 
 GitHub Actions runs on every push and pull request:
@@ -145,16 +182,27 @@ GitHub Actions runs on every push and pull request:
 ## Project Structure
 
 ```
+finra-trace-pipeline/
+├── CMakeLists.txt                    # Build configuration (C++17, GoogleTest, libpq)
+├── Makefile                          # Convenience build targets (build, test, run, clean)
+├── Dockerfile                        # Multi-stage build for containerized deployment
+├── docker-compose.yml                # One-command setup: PostgreSQL + generators + pipeline
+├── .dockerignore                     # Keeps Docker build context clean
+├── fake_trace_generator.py           # TRACE feed simulator (CUSIP gen, trade pairing, late-trade detection)
+├── start_generators.sh               # Starts 3 generator instances for Docker
+├── db/
+│   └── init.sql                      # PostgreSQL schema + issuer seed data (28 issuers)
 ├── src/
-│   ├── mpmc_queue.h              # Lockless MPMC queue (header-only)
-│   └── main.cpp                  # Pipeline: TCP ingest → queue → PostgreSQL
+│   ├── mpmc_queue.h                  # Lockless MPMC queue (header-only, cache-line aligned)
+│   ├── main.cpp                      # Pipeline: TCP ingest → enrichment → queue → PostgreSQL
+│   └── read_issuer_info.cpp          # Issuer data loading utilities
+├── include/
+│   └── nlohmann/                     # JSON parsing library (header-only)
 ├── tests/
-│   ├── test_mpmc_queue.cpp       # Queue correctness, stress, and benchmark tests
-│   └── test_print_tuple.cpp      # Tuple pretty-printer tests
+│   ├── test_mpmc_queue.cpp           # Queue correctness, stress (400K ops), and benchmark
+│   └── test_print_tuple.cpp          # Tuple pretty-printer tests
 ├── utils/
-│   └── print_tuple.h             # Variadic tuple/pair printer (C++17 metaprogramming)
-├── fake_trace_generator.py       # TRACE feed simulator with trade pairing
-├── CMakeLists.txt                # Build configuration
-├── Makefile                      # Convenience build targets
-└── .github/workflows/            # CI/CD pipeline
+│   └── print_tuple.h                 # Variadic tuple/pair printer (C++17 fold expressions)
+└── .github/
+    └── workflows/                    # CI/CD: sanitizer builds, release packaging
 ```
