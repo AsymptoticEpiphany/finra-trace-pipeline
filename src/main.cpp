@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <cstdlib>
 #include <libpq-fe.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -202,10 +203,16 @@ void consumer(int consumerId, const char* conninfo) {
 // Main Function
 // -------------
 int main() {
-    const std::string host = "127.0.0.1";
+    // Configuration from environment (for Docker) with local defaults
+    const char* env_host = std::getenv("TRACE_HOST");
+    const char* env_conninfo = std::getenv("PG_CONNINFO");
+
+    const std::string host = env_host ? env_host : "127.0.0.1";
     const std::vector<int> ports = {5555, 5556, 5557};
     const int numConsumers = 2;
-    const char* conninfo = "dbname=finance user=douglas host=/var/run/postgresql";
+    const char* conninfo = env_conninfo
+        ? env_conninfo
+        : "dbname=finance user=douglas host=/var/run/postgresql";
 
     // Load issuer info
     if (!loadIssuerInfo(conninfo)) {

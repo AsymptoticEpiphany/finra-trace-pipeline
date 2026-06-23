@@ -1,0 +1,9 @@
+build/
+.git/
+*.o
+*.d
+.github/
+README.md
+DESIGN.md
+docker-compose.yml
+.dockerignore
