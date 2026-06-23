@@ -123,9 +123,27 @@ void tcpReader(const std::string& host, int port, int producerId) {
     inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
 
     if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Connect failed");
+        // Retry with backoff — the feed generator may not be listening yet
         close(sock);
-        return;
+        for (int attempt = 1; attempt <= 10; ++attempt) {
+            std::cerr << "[Producer " << producerId << "] Connect to port " << port
+                      << " failed, retry " << attempt << "/10...\n";
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+
+            sock = socket(AF_INET, SOCK_STREAM, 0);
+            if (sock < 0) {
+                perror("Socket creation failed");
+                return;
+            }
+            if (connect(sock, (sockaddr*)&server_addr, sizeof(server_addr)) == 0) {
+                break;  // connected
+            }
+            close(sock);
+            if (attempt == 10) {
+                std::cerr << "[Producer " << producerId << "] Failed to connect after 10 attempts\n";
+                return;
+            }
+        }
     }
 
     std::cout << "[Producer " << producerId << "] Connected to TRACE feed on port " << port << "\n";
@@ -238,3 +256,4 @@ int main() {
 
     return 0;
 }
+

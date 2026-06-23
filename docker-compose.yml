@@ -40,10 +40,11 @@ services:
       - ./start_generators.sh:/app/start_generators.sh
     command: bash /app/start_generators.sh
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.connect(('localhost',5555)); s.close()\""]
-      interval: 2s
+      test: ["CMD-SHELL", "python3 -c \"import socket;\ns=socket.socket(); s.connect(('localhost',5555)); s.close();\ns=socket.socket(); s.connect(('localhost',5556)); s.close();\ns=socket.socket(); s.connect(('localhost',5557)); s.close()\""]
+      interval: 3s
       timeout: 5s
-      retries: 10
+      retries: 15
+      start_period: 5s
 
   # C++ pipeline application
   pipeline:
