@@ -39,12 +39,6 @@ services:
       - ./fake_trace_generator.py:/app/fake_trace_generator.py
       - ./start_generators.sh:/app/start_generators.sh
     command: bash /app/start_generators.sh
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import socket;\ns=socket.socket(); s.connect(('localhost',5555)); s.close();\ns=socket.socket(); s.connect(('localhost',5556)); s.close();\ns=socket.socket(); s.connect(('localhost',5557)); s.close()\""]
-      interval: 3s
-      timeout: 5s
-      retries: 15
-      start_period: 5s
 
   # C++ pipeline application
   pipeline:
@@ -53,7 +47,7 @@ services:
       postgres:
         condition: service_healthy
       generators:
-        condition: service_healthy
+        condition: service_started
     environment:
       TRACE_HOST: generators
       PG_CONNINFO: "dbname=finance user=postgres password=postgres host=postgres"
