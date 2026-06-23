@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# FINRA TRACE Pipeline — Docker Compose
+# ---------------------------------------------------------------------------
+# One-command setup: docker compose up
+#
+# Starts:
+#   1. PostgreSQL with schema and sample issuer data
+#   2. Three TRACE feed simulators on ports 5555-5557
+#   3. The C++ pipeline application
+#
+# The pipeline connects to the feed simulators, parses trade data,
+# enriches with issuer info from PostgreSQL, pushes through the lockless
+# MPMC queue, and persists to the database.
+# ---------------------------------------------------------------------------
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: finance
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finance"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # TRACE feed simulators (3 instances on ports 5555-5557)
+  generators:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./fake_trace_generator.py:/app/fake_trace_generator.py
+      - ./start_generators.sh:/app/start_generators.sh
+    command: bash /app/start_generators.sh
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.connect(('localhost',5555)); s.close()\""]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  # C++ pipeline application
+  pipeline:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      generators:
+        condition: service_healthy
+    environment:
+      TRACE_HOST: generators
+      PG_CONNINFO: "dbname=finance user=postgres password=postgres host=postgres"
